@@ -33,3 +33,218 @@
 		SpringApplication.run(SpringApplication.class, args);
 	}
 ```
+最终调用的是SpringApplication中的方法
+```
+	// SpringApplication.java
+	/**
+	 * Run the Spring application, creating and refreshing a new
+	 * {@link ApplicationContext}.
+	 * @param args the application arguments (usually passed from a Java main method)
+	 * @return a running {@link ApplicationContext}
+	 */
+	public ConfigurableApplicationContext run(String... args) {
+		StopWatch stopWatch = new StopWatch();
+		stopWatch.start();
+		ConfigurableApplicationContext context = null;
+		Collection<SpringBootExceptionReporter> exceptionReporters = new ArrayList<>();
+		configureHeadlessProperty();
+		SpringApplicationRunListeners listeners = getRunListeners(args);
+		listeners.starting();
+		try {
+			ApplicationArguments applicationArguments = new DefaultApplicationArguments(args);
+			ConfigurableEnvironment environment = prepareEnvironment(listeners, applicationArguments);
+			configureIgnoreBeanInfo(environment);
+			Banner printedBanner = printBanner(environment);
+			// 创建环境
+			context = createApplicationContext(); //1
+			exceptionReporters = getSpringFactoriesInstances(SpringBootExceptionReporter.class,
+					new Class[] { ConfigurableApplicationContext.class }, context);
+			// 准备环境
+			prepareContext(context, environment, listeners, applicationArguments, printedBanner);
+			// 刷新环境
+			refreshContext(context); // 2
+			// 刷新环境后处理
+			afterRefresh(context, applicationArguments);
+			stopWatch.stop();
+			if (this.logStartupInfo) {
+				new StartupInfoLogger(this.mainApplicationClass).logStarted(getApplicationLog(), stopWatch);
+			}
+			listeners.started(context);
+			callRunners(context, applicationArguments);
+		}
+		catch (Throwable ex) {
+			handleRunFailure(context, ex, exceptionReporters, listeners);
+			throw new IllegalStateException(ex);
+		}
+
+		try {
+			listeners.running(context);
+		}
+		catch (Throwable ex) {
+			handleRunFailure(context, ex, exceptionReporters, null);
+			throw new IllegalStateException(ex);
+		}
+		return context;
+	}
+```
+// 1  
+创建的环境其实是AnnotationConfigServletWebServerApplicationContext,他继承了ServletWebServerApplicationContext => GenericWebApplicationContext => GenericApplicationContext => AbstractApplicationContext
+所以最终是一个AbstractApplicationContext类  
+//TODO 附上继承树
+```
+	// SpringApplication.java
+	/**
+	 * Strategy method used to create the {@link ApplicationContext}. By default this
+	 * method will respect any explicitly set application context or application context
+	 * class before falling back to a suitable default.
+	 * @return the application context (not yet refreshed)
+	 * @see #setApplicationContextClass(Class)
+	 */
+	protected ConfigurableApplicationContext createApplicationContext() {
+		Class<?> contextClass = this.applicationContextClass;
+		if (contextClass == null) {
+			try {
+				switch (this.webApplicationType) {
+				case SERVLET:
+					//org.springframework.boot.web.servlet.context.AnnotationConfigServletWebServerApplicationContext
+					contextClass = Class.forName(DEFAULT_SERVLET_WEB_CONTEXT_CLASS);
+					break;
+				case REACTIVE:
+					contextClass = Class.forName(DEFAULT_REACTIVE_WEB_CONTEXT_CLASS);
+					break;
+				default:
+					contextClass = Class.forName(DEFAULT_CONTEXT_CLASS);
+				}
+			}
+			catch (ClassNotFoundException ex) {
+				throw new IllegalStateException(
+						"Unable create a default ApplicationContext, please specify an ApplicationContextClass", ex);
+			}
+		}
+		return (ConfigurableApplicationContext) BeanUtils.instantiateClass(contextClass);
+	}
+
+```
+// 2  
+然后回去追刷新环境的方法
+```
+	protected void refresh(ApplicationContext applicationContext) {
+		Assert.isInstanceOf(AbstractApplicationContext.class, applicationContext);
+		((AbstractApplicationContext) applicationContext).refresh();
+	}
+```
+实际执行的是 AbstractApplicationContext(父类)的方法
+
+```
+	// org.springframework.context.support.AbstractApplicationContext#refresh
+	@Override
+	public void refresh() throws BeansException, IllegalStateException {
+		synchronized (this.startupShutdownMonitor) {
+			// Prepare this context for refreshing.
+			prepareRefresh();
+
+			// Tell the subclass to refresh the internal bean factory.
+			ConfigurableListableBeanFactory beanFactory = obtainFreshBeanFactory();
+
+			// Prepare the bean factory for use in this context.
+			prepareBeanFactory(beanFactory);
+
+			try {
+				// Allows post-processing of the bean factory in context subclasses.
+				postProcessBeanFactory(beanFactory);
+
+				// Invoke factory processors registered as beans in the context.
+				invokeBeanFactoryPostProcessors(beanFactory);
+
+				// Register bean processors that intercept bean creation.
+				registerBeanPostProcessors(beanFactory);
+
+				// Initialize message source for this context.
+				initMessageSource();
+
+				// Initialize event multicaster for this context.
+				initApplicationEventMulticaster();
+
+				// Initialize other special beans in specific context subclasses.
+				// 在这里调用，但是实际上是调用了子类的方法
+				onRefresh();
+
+				// Check for listener beans and register them.
+				registerListeners();
+
+				// Instantiate all remaining (non-lazy-init) singletons.
+				finishBeanFactoryInitialization(beanFactory);
+
+				// Last step: publish corresponding event.
+				finishRefresh();
+			}
+
+			catch (BeansException ex) {
+				if (logger.isWarnEnabled()) {
+					logger.warn("Exception encountered during context initialization - " +
+							"cancelling refresh attempt: " + ex);
+				}
+
+				// Destroy already created singletons to avoid dangling resources.
+				destroyBeans();
+
+				// Reset 'active' flag.
+				cancelRefresh(ex);
+
+				// Propagate exception to caller.
+				throw ex;
+			}
+
+			finally {
+				// Reset common introspection caches in Spring's core, since we
+				// might not ever need metadata for singleton beans anymore...
+				resetCommonCaches();
+			}
+		}
+	}
+
+```
+// TODO 这里有个问题，继承关系是 AnnotationConfigServletWebServerApplicationContext => ServletWebServerApplicationContext => GenericWebApplicationContext => GenericApplicationContext => AbstractApplicationContext
+但是在代码上
+AnnotationConfigServletWebServerApplicationContext 无
+ServletWebServerApplicationContext 有
+GenericWebApplicationContext 有 
+GenericApplicationContext 无
+AbstractApplicationContext 有(最终的父方法)
+
+实际调用的是 的 onRefresh 方法
+```
+	// org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext#onRefresh
+	@Override
+	protected void onRefresh() {
+		super.onRefresh();
+		try {
+			// 在这个地方创建了WebServer服务器
+			createWebServer();
+		}
+		catch (Throwable ex) {
+			throw new ApplicationContextException("Unable to start web server", ex);
+		}
+	}
+```
+在创建服务器的时候使用的是ServletWebServerFactory,调用getWebServer()方法
+```
+	private void createWebServer() {
+		WebServer webServer = this.webServer;
+		ServletContext servletContext = getServletContext();
+		if (webServer == null && servletContext == null) {
+			ServletWebServerFactory factory = getWebServerFactory();
+			this.webServer = factory.getWebServer(getSelfInitializer());
+		}
+		else if (servletContext != null) {
+			try {
+				getSelfInitializer().onStartup(servletContext);
+			}
+			catch (ServletException ex) {
+				throw new ApplicationContextException("Cannot initialize servlet context", ex);
+			}
+		}
+		initPropertySources();
+	}
+
+```
